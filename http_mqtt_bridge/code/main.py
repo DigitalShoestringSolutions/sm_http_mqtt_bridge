@@ -1,32 +1,51 @@
-# Check config file is valid
-# create BBs
-# plumb BBs together
-# start BBs
-# monitor tasks
-
 # packages
+import signal
 import tomli
 import time
 import logging
+import argparse
 import zmq
+import sys
+import os
 # local
 import http_server_in
 import mqtt_out
 
 logger = logging.getLogger("main")
-logging.basicConfig(level=logging.DEBUG)  # move to log config file using python functionality
+terminate_flag = False
 
 
-def get_config():
-    with open("./config/config.toml", "rb") as f:
+def get_config(arg_filename):
+    attempt_list = [('./config/config.toml', 'defaults')]
+
+    if arg_filename:
+        attempt_list.insert(0, (arg_filename, "cmd line args"))
+
+    env_conf_file = os.getenv("DCSM_CONFIG")
+    if env_conf_file:
+        attempt_list.insert(0, (env_conf_file, "environment variable"))
+
+    for filename, src in attempt_list:
+        try:
+            config = do_get_config(filename)
+            logger.info(f'Loaded config file "{filename}" specified in {src}')
+            return config
+        except FileNotFoundError:
+            logger.error(
+                f'File Not Found - unable to load config file "{filename}" specified in {src}. Falling back to next option.')
+    logger.critical('No valid config file found! Exiting now.')
+    sys.exit(255)
+
+
+def do_get_config(filename):
+    with open(filename, "rb") as f:
         toml_conf = tomli.load(f)
-    logger.info(f"config:{toml_conf}")
+    logger.debug(f"config: {toml_conf}")
     return toml_conf
 
 
 def config_valid(config):
     return True
-
 
 def create_building_blocks(config):
     bbs = {}
@@ -34,8 +53,8 @@ def create_building_blocks(config):
     http_out = {"type": zmq.PUSH, "address": "tcp://127.0.0.1:4000", "bind": True}
     mqtt_in = {"type": zmq.PULL, "address": "tcp://127.0.0.1:4000", "bind": False}
 
-    bbs["http_in"] = http_server_in.HTTPInBuildingBlock(config, http_out)
-    bbs["mqtt_out"] = mqtt_out.MQTTServiceWrapper(config, mqtt_in)
+    bbs["http_in"] = {"class": http_server_in.HTTPInBuildingBlock, "args": [config, http_out]}
+    bbs["mqtt_out"] = {"class": mqtt_out.MQTTServiceWrapper, "args": [config, mqtt_in]}
 
     logger.debug(f"bbs {bbs}")
     return bbs
@@ -43,24 +62,78 @@ def create_building_blocks(config):
 
 def start_building_blocks(bbs):
     for key in bbs:
-        p = bbs[key].start()
+        start_building_block(bbs[key])
 
+
+def start_building_block(bb):
+    cls = bb['class']
+    args = bb['args']
+
+    process = cls(*args)
+
+    process.start()
+    bb['process'] = process
 
 def monitor_building_blocks(bbs):
     while True:
         time.sleep(1)
+        if terminate_flag:
+            logger.info("Terminating gracefully")
+            for key in bbs:
+                process = bbs[key]['process']
+                process.join()
+            return
+
         for key in bbs:
-            # logger.debug(f"{bbs[key].exitcode}, {bbs[key].is_alive()}")
-            # todo actually monitor
-            pass
+            process = bbs[key]['process']
+            if process.is_alive() is False:
+                logger.warning(f"Building block {key} stopped with exit: {process.exitcode}")
+                logger.info(f"Restarting Building block {key}")
+                start_building_block(bbs[key])
+
+
+def graceful_signal_handler(sig, _frame):
+    logger.info(f'Received {signal.Signals(sig).name}. Triggering graceful termination.')
+    # todo handle gracefully
+    global terminate_flag
+    terminate_flag = True
+    signal.alarm(10)
+
+
+def harsh_signal_handler(sig, _frame):
+    logger.debug(f'Received {signal.Signals(sig).name}.')
+    if terminate_flag:
+        logger.error(f'Failed to terminate gracefully before timeout - hard terminating')
+        sys.exit(0)
+
+
+def handle_args():
+    levels = {'debug': logging.DEBUG, 'info': logging.INFO, 'warning': logging.WARNING, 'error': logging.ERROR}
+    parser = argparse.ArgumentParser(description='Validate config file for sensing data collection service module.',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--log", choices=['debug', 'info', 'warning', 'error'], help="Log level", default='info',
+                        type=str)
+    parser.add_argument("--config", help="Config file", type=str)
+    args = parser.parse_args()
+
+    log_level = levels.get(args.log, logging.INFO)
+    conf_file = args.config
+
+    return conf_file, log_level
 
 
 if __name__ == "__main__":
-    conf = get_config()
-    # todo set logging level from config file
+    conf_file, log_level = handle_args()
+    logging.basicConfig(level=log_level)
+    conf = get_config(conf_file)
+    signal.signal(signal.SIGINT, graceful_signal_handler)
+    signal.signal(signal.SIGTERM, graceful_signal_handler)
+    signal.signal(signal.SIGALRM, harsh_signal_handler)
     if config_valid(conf):
         bbs = create_building_blocks(conf)
         start_building_blocks(bbs)
         monitor_building_blocks(bbs)
     else:
         raise Exception("bad config")
+
+    logger.info("Done")

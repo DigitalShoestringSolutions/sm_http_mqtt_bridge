@@ -34,6 +34,7 @@ class HTTPInBuildingBlock(multiprocessing.Process):
         cherrypy.quickstart(PostHandler(self), config={'global': {
             'engine.autoreload.on': False
         }})
+        logger.info("Done")
 
 
 
