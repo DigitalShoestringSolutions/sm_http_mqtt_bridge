@@ -1,4 +1,5 @@
 import json
+import traceback
 import cherrypy
 import logging
 import zmq
@@ -31,11 +32,14 @@ class HTTPInBuildingBlock(multiprocessing.Process):
         cherrypy.config.update({
             'server.socket_host': '0.0.0.0',
             'server.socket_port': 8080})
-        cherrypy.quickstart(PostHandler(self), config={'global': {
-            'engine.autoreload.on': False
-        }})
+        try:
+            cherrypy.quickstart(PostHandler(self), config={'global': {
+                'engine.autoreload.on': False
+            }})
+        except Exception:
+            logger.error(traceback.format_exc())
+        
         logger.info("Done")
-
 
 
     def dispatch(self, output):
