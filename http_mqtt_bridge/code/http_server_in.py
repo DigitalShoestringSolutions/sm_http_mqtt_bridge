@@ -3,10 +3,12 @@ import traceback
 import cherrypy
 import logging
 import zmq
+import threading
 import multiprocessing
 logger = logging.getLogger("main.http_server_in")
 context = zmq.Context()
 
+zmq_lock = threading.Lock()
 
 class HTTPInBuildingBlock(multiprocessing.Process):
     def __init__(self, config, zmq_conf):
@@ -34,7 +36,8 @@ class HTTPInBuildingBlock(multiprocessing.Process):
             'server.socket_port': 8080})
         try:
             cherrypy.quickstart(PostHandler(self), config={'global': {
-                'engine.autoreload.on': False
+                'engine.autoreload.on': False,
+                'server.thread_pool':1
             }})
         except Exception:
             logger.error(traceback.format_exc())
@@ -43,8 +46,9 @@ class HTTPInBuildingBlock(multiprocessing.Process):
 
 
     def dispatch(self, output):
-        logger.info(f"dispatch to { output['path']} of {output['payload']}")
-        self.zmq_out.send_json({'path': output.get('path', ""), 'payload': output['payload']})
+        with zmq_lock:
+            logger.info(f"dispatch to { output['path']} of {output['payload']}")
+            self.zmq_out.send_json({'path': output.get('path', ""), 'payload': output['payload']})
 
 
 class PostHandler(object):
