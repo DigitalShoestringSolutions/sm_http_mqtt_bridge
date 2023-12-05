@@ -19,41 +19,41 @@ class HTTPInBuildingBlock(multiprocessing.Process):
 
         # declarations
         self.zmq_conf = zmq_conf
-        self.zmq_out = None
-
-    def do_connect(self):
-        self.zmq_out = context.socket(self.zmq_conf['type'])
-        if self.zmq_conf["bind"]:
-            self.zmq_out.bind(self.zmq_conf["address"])
-        else:
-            self.zmq_out.connect(self.zmq_conf["address"])
 
     def run(self):
         logger.info("started")
-        self.do_connect()
         cherrypy.config.update({
             'server.socket_host': '0.0.0.0',
             'server.socket_port': 8080})
         try:
-            cherrypy.quickstart(PostHandler(self), config={'global': {
+            cherrypy.quickstart(PostHandler(self.zmq_conf), config={'global': {
                 'engine.autoreload.on': False,
-                'server.thread_pool':1
+                # 'server.thread_pool':1
             }})
         except Exception:
             logger.error(traceback.format_exc())
         
         logger.info("Done")
 
+def get_socket(zmq_conf):
+    socket = context.socket(zmq_conf['type'])
+    if zmq_conf["bind"]:
+        socket.bind(zmq_conf["address"])
+    else:
+        socket.connect(zmq_conf["address"])
+    return socket
 
-    def dispatch(self, output):
-        with zmq_lock:
-            logger.info(f"dispatch to { output['path']} of {output['payload']}")
-            self.zmq_out.send_json({'path': output.get('path', ""), 'payload': output['payload']})
+
+
+def dispatch(config,output):
+    socket = get_socket(config)
+    logger.info(f"dispatch to { output['path']} of {output['payload']}")
+    socket.send_json({'path': output.get('path', ""), 'payload': output['payload']})
 
 
 class PostHandler(object):
-    def __init__(self,parent):
-        self.parent = parent
+    def __init__(self,zmq_conf):
+        self.zmq_conf = zmq_conf
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
@@ -62,6 +62,6 @@ class PostHandler(object):
             topic = '/'.join(args)
             payload = cherrypy.request.json
             logger.debug(f"{topic}:>:{payload}")
-            self.parent.dispatch({'path':topic,'payload':payload})
+            dispatch(self.zmq_conf,{'path':topic,'payload':payload})
             return
         

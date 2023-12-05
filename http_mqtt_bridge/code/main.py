@@ -50,8 +50,8 @@ def config_valid(config):
 def create_building_blocks(config):
     bbs = {}
 
-    http_out = {"type": zmq.PUSH, "address": "tcp://127.0.0.1:4000", "bind": True}
-    mqtt_in = {"type": zmq.PULL, "address": "tcp://127.0.0.1:4000", "bind": False}
+    http_out = {"type": zmq.PUSH, "address": "tcp://127.0.0.1:4000", "bind": False}
+    mqtt_in = {"type": zmq.PULL, "address": "tcp://127.0.0.1:4000", "bind": True}
 
     bbs["http_in"] = {"class": http_server_in.HTTPInBuildingBlock, "args": [config, http_out]}
     bbs["mqtt_out"] = {"class": mqtt_out.MQTTServiceWrapper, "args": [config, mqtt_in]}
